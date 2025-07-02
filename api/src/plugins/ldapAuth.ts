@@ -1,5 +1,6 @@
 import { makeExtendSchemaPlugin, gql } from "graphile-utils";
 import * as ldapAuthentication from "ldap-authentication";
+import * as jwt from "jsonwebtoken";
 import config from "../config";
 import { Context } from "./uploadLogo";
 
@@ -88,8 +89,11 @@ export default makeExtendSchemaPlugin(() => {
         ldapAuthEnabled: Boolean
       }
       ${config.ldap.enabled ? `
+        type LdapAuthPayload {
+          jwt: String
+        }
         extend type Mutation {
-          loginWithLdap(username: String!, password: String!): LoginPayload
+          authenticateWithLdap(username: String!, password: String!): LdapAuthPayload
         }
       ` : ''}
     `,
@@ -99,8 +103,8 @@ export default makeExtendSchemaPlugin(() => {
       },
       ...(config.ldap.enabled ? {
         Mutation: {
-          loginWithLdap: async (_parent: unknown, args: { username: string; password: string }, context: Context) => {
-            console.log("LDAP loginWithLdap resolver called for user:", args.username);
+          authenticateWithLdap: async (_parent: unknown, args: { username: string; password: string }, context: Context) => {
+            console.log("LDAP authenticateWithLdap resolver called for user:", args.username);
             const { username, password } = args;
             
             if (!config.ldap.enabled) {
@@ -116,18 +120,43 @@ export default makeExtendSchemaPlugin(() => {
 
             // Determine user role based on LDAP groups
             const userRole = getUserRoleFromGroups(ldapUser.memberOf || []);
+            console.log("Determined user role:", userRole);
 
             try {
               // Use the database function to handle user creation/update
+              console.log("Calling database function with:", { username, userRole, ldapData: JSON.stringify(ldapUser) });
               const result = await context.pgClient.query(
-                `SELECT ctfnote.login_ldap($1, $2, $3) as jwt`,
+                `SELECT (ctfnote.login_ldap($1, $2, $3)).*`,
                 [username, userRole, JSON.stringify(ldapUser)]
               );
 
-              const jwt = result.rows[0].jwt;
+              console.log("Database query result:", result);
+              console.log("Result rows:", result.rows);
+              
+              const jwtRow = result.rows[0];
+              console.log("JWT row:", jwtRow);
+
+              if (!jwtRow || !jwtRow.user_id) {
+                console.error("Database function returned no JWT data");
+                throw new Error("Database function failed to generate token");
+              }
+
+              // Create JWT payload from the database result
+              const jwtPayload = {
+                user_id: parseInt(jwtRow.user_id),
+                role: jwtRow.role,
+                exp: parseInt(jwtRow.exp),
+                aud: "postgraphile" // Add the required audience
+              };
+              console.log("JWT payload:", jwtPayload);
+
+              // Sign the JWT token using the same secret as PostGraphile
+              const jwtSecret = config.env === "development" ? "DEV" : config.sessionSecret;
+              const signedJwt = jwt.sign(jwtPayload, jwtSecret);
+              console.log("Signed JWT token:", signedJwt);
 
               return {
-                jwt: jwt,
+                jwt: signedJwt,
               };
             } catch (dbError) {
               console.error("Database error during LDAP login:", dbError);

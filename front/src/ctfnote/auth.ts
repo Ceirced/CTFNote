@@ -125,8 +125,8 @@ export function useLogout() {
 
 // LDAP Login GraphQL mutation (will be generated after server is running)
 const LOGIN_WITH_LDAP_MUTATION = gql`
-  mutation LoginWithLdap($username: String!, $password: String!) {
-    loginWithLdap(username: $username, password: $password) {
+  mutation AuthenticateWithLdap($username: String!, $password: String!) {
+    authenticateWithLdap(username: $username, password: $password) {
       jwt
     }
   }
@@ -143,15 +143,15 @@ export function useLdapLogin() {
         variables: { username, password },
       });
       
-      // Temporary type assertion until GraphQL types are regenerated
+      // Use the correct response structure for authenticateWithLdap
       interface LdapLoginResponse {
-        loginWithLdap?: {
+        authenticateWithLdap?: {
           jwt?: string;
         };
       }
       
       const data = r?.data as LdapLoginResponse | undefined;
-      const jwt = data?.loginWithLdap?.jwt;
+      const jwt = data?.authenticateWithLdap?.jwt;
       
       console.log('LDAP login response:', { jwt: jwt ? 'received' : 'missing', data });
       
